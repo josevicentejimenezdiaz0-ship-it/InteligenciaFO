@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Archivo Político</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101522;color:#edf2fa;font:16px Arial,sans-serif}
+header{padding:18px;background:#192235;border-bottom:1px solid #39465e}
+h1,h2{margin-top:0}
+main{max-width:1100px;margin:auto;padding:15px;display:grid;gap:15px}
+@media(min-width:850px){main{grid-template-columns:320px 1fr}}
+section{background:#192235;border:1px solid #39465e;border-radius:12px;padding:15px;min-width:0}
+label{display:block;color:#bdc8da;margin:10px 0 5px}
+input,textarea,button{font:inherit;border-radius:7px;padding:10px;width:100%}
+input,textarea{background:#101522;color:white;border:1px solid #39465e}
+textarea{min-height:90px}
+button{cursor:pointer;background:#293750;color:white;border:1px solid #43516a;margin-top:7px}
+button.primary{background:#d4ad62;color:#171717;font-weight:bold}
+button.danger{color:#ffb4b4}
+.profile{display:flex;align-items:center;gap:10px;text-align:left;margin-top:8px}
+.avatar{width:55px;height:55px;object-fit:cover;border-radius:8px;background:#34415a;display:grid;place-items:center;flex-shrink:0}
+.profile div:last-child{overflow-wrap:anywhere}
+.profile small{display:block;color:#bdc8da;margin-top:4px}
+.hidden{display:none}
+.grid{display:grid;grid-template-columns:1fr;gap:0 12px}
+@media(min-width:550px){.grid{grid-template-columns:1fr 1fr}}
+.actions{display:flex;gap:7px;flex-wrap:wrap}
+.actions button{flex:1}
+.muted{color:#bdc8da;font-size:.9rem}
+#map{width:100%;height:350px;background:#101522;border-radius:8px}
+#status{color:#d4ad62;margin-top:10px;font-size:.9rem}
+</style>
+</head>
+<body>
+<header>
+<h1>📚 Archivo Político</h1>
+<p class="muted">Personajes, ideologías, partidos y alianzas políticas.</p>
+</header>
+
+<main>
+<section>
+<h2>Perfiles políticos</h2>
+<label for="search">Buscar</label>
+<input id="search" placeholder="Nombre, partido, ideología...">
+<div class="actions">
+<button class="primary" id="new">＋ Nuevo perfil</button>
+<button id="export">Exportar datos</button>
+</div>
+<label for="import">Importar copia de seguridad</label>
+<input id="import" type="file" accept=".json,application/json">
+<div id="list"></div>
+<div id="status"></div>
+</section>
+
+<section>
+<div id="empty">
+<h2>Bienvenido a Archivo Político</h2>
+<p>Crea un perfil para empezar a organizar tu archivo.</p>
+</div>
+
+<form id="form" class="hidden">
+<h2 id="formTitle">Nuevo perfil</h2>
+<input type="hidden" id="id">
+
+<div class="grid">
+<div><label for="name">Nombre *</label><input id="name" required maxlength="120"></div>
+<div><label for="position">Cargo político</label><input id="position"></div>
+<div><label for="party">Partido o facción</label><input id="party"></div>
+<div><label for="ideology">Ideología</label><input id="ideology"></div>
+<div><label for="influence">Influencia (0–100)</label><input id="influence" type="number" min="0" max="100" value="50"></div>
+<div><label for="trust">Confianza (0–100)</label><input id="trust" type="number" min="0" max="100" value="50"></div>
+</div>
+
+<label for="relations">Aliados y relaciones</label>
+<input id="relations" placeholder="Nombres exactos separados por comas">
+
+<label for="photo">Fotografía</label>
+<input id="photo" type="file" accept="image/*">
+<div id="preview"></div>
+
+<label for="photoNote">Anotaciones de la fotografía</label>
+<textarea id="photoNote"></textarea>
+
+<label for="notes">Notas personales</label>
+<textarea id="notes" placeholder="Información, historia, observaciones..."></textarea>
+
+<label for="links">Enlaces (uno por línea)</label>
+<textarea id="links" placeholder="https://..."></textarea>
+
+<div class="actions">
+<button class="primary" type="submit">Guardar perfil</button>
+<button type="button" id="cancel">Cancelar</button>
+<button type="button" class="danger" id="delete">Eliminar</button>
+</div>
+</form>
+</section>
+
+<section style="grid-column:1/-1">
+<h2>🕸️ Mapa de alianzas</h2>
+<p class="muted">Las líneas conectan los perfiles que se mencionan mutuamente o que tienen una relación registrada.</p>
+<svg id="map" viewBox="0 0 900 350" role="img" aria-label="Mapa de alianzas"></svg>
+</section>
+</main>
+
+<script>
+(() => {
+"use strict";
+
+const KEY = "archivoPolitico_v1";
+const $ = id => document.getElementById(id);
+
+let profiles = load();
+let selected = null;
+let photoData = "";
+
+function load(){
+  try{
+    const data = JSON.parse(localStorage.getItem(KEY) || "[]");
+    if(Array.isArray(data)) return data;
+    if(data && Array.isArray(data.profiles)) return data.profiles;
+  }catch(e){}
+  return [];
+}
+
+function save(){
+  try{
+    localStorage.setItem(KEY, JSON.stringify(profiles));
+    status("Datos guardados en este navegador.");
+    return true;
+  }catch(e){
+    status("No se pudo guardar. Prueba con una fotografía más pequeña.");
+    return false;
+  }
+}
+
+function status(message){ $("status").textContent = message; }
+
+function makeId(){
+  return "p_" + Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+function initials(name){
+  return String(name || "?").trim().split(/\s+/).slice(0,2)
+    .map(x => x[0] || "").join("").toUpperCase() || "?";
+}
+
+function renderList(){
+  const query = $("search").value.trim().toLocaleLowerCase("es");
+  const list = $("list");
+  list.innerHTML = "";
+
+  const filtered = profiles.filter(p =>
+    [p.name,p.position,p.party,p.ideology].join(" ")
+      .toLocaleLowerCase("es").includes(query)
+  );
+
+  if(!filtered.length){
+    list.innerHTML = '<p class="muted">No hay perfiles que mostrar.</p>';
+    return;
+  }
+
+  filtered.forEach(p => {
+    const btn = document.createElement("button");
+    btn.className = "profile";
+    btn.type = "button";
+
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+
+    if(p.photo){
+      const img = document.createElement("img");
+      img.src = p.photo;
+      img.className = "avatar";
+      img.alt = "";
+      btn.appendChild(img);
+    }else{
+      avatar.textContent = initials(p.name);
+      btn.appendChild(avatar);
+    }
+
+    const info = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = p.name || "Sin nombre";
+    const small = document.createElement("small");
+    small.textContent = [p.position,p.party].filter(Boolean).join(" · ") || "Sin cargo";
+    info.append(name,small);
+    btn.appendChild(info);
+
+    if(p.id === selected) btn.style.borderColor = "#d4ad62";
+    btn.addEventListener("click",()=>openProfile(p.id));
+    list.appendChild(btn);
+  });
+}
+
+function renderPreview(){
+  const preview = $("preview");
+  preview.innerHTML = "";
+  if(photoData){
+    const img = document.createElement("img");
+    img.src = photoData;
+    img.alt = "Vista previa";
+    img.style.cssText = "max-width:130px;max-height:130px;object-fit:cover;border-radius:8px;margin-top:8px";
+    preview.appendChild(img);
+  }
+}
+
+function newProfile(){
+  selected = null;
+  photoData = "";
+  $("form").reset();
+  $("id").value = "";
+  $("influence").value = 50;
+  $("trust").value = 50;
+  $("formTitle").textContent = "Nuevo perfil";
+  $("empty").classList.add("hidden");
+  $("form").classList.remove("hidden");
+  $("delete").classList.add("hidden");
+  renderPreview();
+}
+
+function openProfile(id){
+  const p = profiles.find(x => x.id === id);
+  if(!p) return;
+
+  selected = p.id;
+  photoData = p.photo || "";
+
+  $("id").value = p.id;
+  $("name").value = p.name || "";
+  $("position").value = p.position || "";
+  $("party").value = p.party || "";
+  $("ideology").value = p.ideology || "";
+  $("influence").value = p.influence ?? 50;
+  $("trust").value = p.trust ?? 50;
+  $("relations").value = Array.isArray(p.relations)
+    ? p.relations.join(", ") : (p.relations || "");
+  $("photo").value = "";
+  $("photoNote").value = p.photoNote || "";
+  $("notes").value = p.notes || "";
+  $("links").value = p.links || "";
+
+  $("formTitle").textContent = "Editar perfil";
+  $("empty").classList.add("hidden");
+  $("form").classList.remove("hidden");
+  $("delete").classList.remove("hidden");
+
+  renderPreview();
+  renderList();
+  renderMap();
+}
+
+$("new").addEventListener("click",newProfile);
+$("search").addEventListener("input",renderList);
+
+$("photo").addEventListener("change",event=>{
+  const file = event.target.files[0];
+  if(!file) return;
+  if(!file.type.startsWith("image/")){
+    status("Selecciona un archivo de imagen.");
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const scale = Math.min(1,900/Math.max(img.width,img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1,Math.round(img.width*scale));
+      canvas.height = Math.max(1,Math.round(img.height*scale));
+      canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+      photoData = canvas.toDataURL("image/jpeg",0.8);
+      renderPreview();
+      status("Fotografía lista. Guarda el perfil.");
+    };
+    img.onerror = ()=>status("No se pudo abrir esa fotografía.");
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+$("form").addEventListener("submit",event=>{
+  event.preventDefault();
+  const name = $("name").value.trim();
+  if(!name) return;
+
+  const id = $("id").value || makeId();
+  const old = profiles.find(p=>p.id===id);
+
+  const p = {
+    ...(old || {}),
+    id,
+    name,
+    position:$("position").value.trim(),
+    party:$("party").value.trim(),
+    ideology:$("ideology").value.trim(),
+    influence:Math.max(0,Math.min(100,Number($("influence").value)||0)),
+    trust:Math.max(0,Math.min(100,Number($("trust").value)||0)),
+    relations:$("relations").value.split(",").map(x=>x.trim()).filter(Boolean),
+    photo:photoData,
+    photoNote:$("photoNote").value.trim(),
+    notes:$("notes").value.trim(),
+    links:$("links").value.trim(),
+    updatedAt:new Date().toISOString()
+  };
+
+  if(old) profiles = profiles.map(x=>x.id===id?p:x);
+  else{
+    p.createdAt = new Date().toISOString();
+    profiles.push(p);
+  }
+
+  selected = id;
+  if(save()){
+    renderList();
+    renderMap();
+    openProfile(id);
+    status("Perfil guardado correctamente.");
+  }
+});
+
+$("cancel").addEventListener("click",()=>{
+  selected = null;
+  $("form").classList.add("hidden");
+  $("empty").classList.remove("hidden");
+  renderList();
+  renderMap();
+});
+
+$("delete").addEventListener("click",()=>{
+  if(!selected) return;
+  const p = profiles.find(x=>x.id===selected);
+  if(!p || !confirm('¿Eliminar el perfil "'+p.name+'"?')) return;
+
+  profiles = profiles.filter(x=>x.id!==selected);
+  selected = null;
+  save();
+  $("form").classList.add("hidden");
+  $("empty").classList.remove("hidden");
+  renderList();
+  renderMap();
+  status("Perfil eliminado.");
+});
+
+$("export").addEventListener("click",()=>{
+  const data = {
+    app:"Archivo Político",
+    version:2,
+    exportedAt:new Date().toISOString(),
+    profiles
+  };
+  const blob = new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "archivo-politico-copia.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+  status("Copia de seguridad exportada.");
+});
+
+$("import").addEventListener("change",async event=>{
+  const file = event.target.files[0];
+  if(!file) return;
+
+  try{
+    const data = JSON.parse(await file.text());
+    const incoming = Array.isArray(data) ? data : data.profiles;
+    if(!Array.isArray(incoming)) throw new Error("Formato incorrecto");
+
+    if(!confirm("La importación sustituirá los perfiles actuales. ¿Continuar?")) return;
+
+    profiles = incoming.filter(p=>p && typeof p==="object").map(p=>({
+      ...p,
+      id:String(p.id || makeId()),
+      name:String(p.name || "Sin nombre"),
+      relations:Array.isArray(p.relations)
+        ? p.relations
+        : String(p.relations || "").split(",").map(x=>x.trim()).filter(Boolean)
+    }));
+
+    selected = null;
+    save();
+    $("form").classList.add("hidden");
+    $("empty").classList.remove("hidden");
+    renderList();
+    renderMap();
+    status("Copia importada.");
+  }catch(e){
+    alert("No se pudo importar. Selecciona una copia JSON válida.");
+  }finally{
+    event.target.value = "";
+  }
+});
+
+function renderMap(){
+  const svg = $("map");
+  const NS = "http://www.w3.org/2000/svg";
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+
+  if(!profiles.length){
+    const t = document.createElementNS(NS,"text");
+    t.setAttribute("x","450");
+    t.setAttribute("y","175");
+    t.setAttribute("text-anchor","middle");
+    t.setAttribute("fill","#bdc8da");
+    t.textContent = "Crea perfiles para visualizar las alianzas";
+    svg.appendChild(t);
+    return;
+  }
+
+  const cx = 450, cy = 165;
+  const radius = Math.min(125,45+profiles.length*8);
+  const nodes = profiles.map((p,i)=>{
+    const a = -Math.PI/2 + 2*Math.PI*i/profiles.length;
+    return {
+      ...p,
+      x:profiles.length===1?cx:cx+radius*Math.cos(a),
+      y:profiles.length===1?cy:cy+radius*Math.sin(a)
+    };
+  });
+
+  const byName = new Map(nodes.map(n=>[
+    String(n.name).trim().toLocaleLowerCase("es"),n
+  ]));
+  const edges = new Set();
+
+  nodes.forEach(a=>{
+    const rels = Array.isArray(a.relations)
+      ? a.relations : String(a.relations || "").split(",");
+    rels.forEach(name=>{
+      const b = byName.get(String(name).trim().toLocaleLowerCase("es"));
+      if(!b || b.id===a.id) return;
+      const key = [a.id,b.id].sort().join("|");
+      if(edges.has(key)) return;
+      edges.add(key);
+
+      const line = document.createElementNS(NS,"line");
+      line.setAttribute("x1",a.x);
+      line.setAttribute("y1",a.y);
+      line.setAttribute("x2",b.x);
+      line.setAttribute("y2",b.y);
+      line.setAttribute("stroke","#d4ad62");
+      line.setAttribute("stroke-width","2");
+      svg.appendChild(line);
+    });
+  });
+
+  nodes.forEach(n=>{
+    const g = document.createElementNS(NS,"g");
+    g.style.cursor = "pointer";
+
+    const circle = document.createElementNS(NS,"circle");
+    circle.setAttribute("cx",n.x);
+    circle.setAttribute("cy",n.y);
+    circle.setAttribute("r","23");
+    circle.setAttribute("fill",n.id===selected?"#d4ad62":"#2b3b57");
+    circle.setAttribute("stroke","#8798b5");
+    circle.setAttribute("stroke-width","2");
+    g.appendChild(circle);
+
+    if(n.photo){
+      const image = document.createElementNS(NS,"image");
+      image.setAttribute("href",n.photo);
+      image.setAttribute("x",n.x-21);
+      image.setAttribute("y",n.y-21);
+      image.setAttribute("width","42");
+      image.setAttribute("height","42");
+      image.setAttribute("preserveAspectRatio","xMidYMid slice");
+      g.appendChild(image);
+    }else{
+      const t = document.createElementNS(NS,"text");
+      t.setAttribute("x",n.x);
+      t.setAttribute("y",n.y+5);
+      t.setAttribute("text-anchor","middle");
+      t.setAttribute("fill","#fff");
+      t.textContent = initials(n.name);
+      g.appendChild(t);
+    }
+
+    const label = document.createElementNS(NS,"text");
+    label.setAttribute("x",n.x);
+    label.setAttribute("y",n.y+39);
+    label.setAttribute("text-anchor","middle");
+    label.setAttribute("fill","#edf2fa");
+    label.setAttribute("font-size","12");
+    label.textContent = n.name.length>20?n.name.slice(0,18)+"…":n.name;
+    g.appendChild(label);
+
+    g.addEventListener("click",()=>openProfile(n.id));
+    svg.appendChild(g);
+  });
+}
+
+renderList();
+renderMap();
+
+})();
+</script>
+</body>
+</html>
